@@ -4,6 +4,7 @@
 #include <ctime>
 #include "device_launch_parameters.h"
 #include "cuda_functions.h"
+#include <helper_cuda.h>
 
 #define GRID_SIZE 1024
 #define BLOCK_SIZE 256
@@ -191,70 +192,71 @@ __global__ void render_kernel(uchar4* output, int width, int height, float time)
 }
 
 extern "C" void cuda_init(unsigned long long* data, int gridSize, float density){
-    cudaMemcpyToSymbol((void*)&c_gridSize, &gridSize, sizeof(int));
-    cudaMemcpyToSymbol(d_data, &data, sizeof(unsigned long long*));
+    const void* p_gridSize = static_cast<const void*>(&c_gridSize); // Не удалять p_gridSize: используется для избежания красного подчёркивания в CUDACHECK
+    checkCudaErrors(cudaMemcpyToSymbol(p_gridSize, &gridSize, sizeof(int)));
+    checkCudaErrors(cudaMemcpyToSymbol(d_data, &data, sizeof(unsigned long long*)));
 
     size_t num_elements = (gridSize * gridSize * gridSize + 63) / 64;
     size_t state_size = num_elements * sizeof(curandState);
     curandState* states;
-    cudaMalloc(&states, state_size);
+    checkCudaErrors(cudaMalloc(&states, state_size));
 
     // Инициализируем генератор случайных чисел
     curandGenerator_t gen;
-    curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT);
-    curandSetPseudoRandomGeneratorSeed(gen, 1234);
+    checkCurandErrors(curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT));
+    checkCurandErrors(curandSetPseudoRandomGeneratorSeed(gen, 1234));
 
     // Заполняем states случайными значениями
     float* temp;
-    cudaMalloc(&temp, state_size);
-    curandGenerateUniform(gen, temp, state_size / sizeof(float));
-    cudaMemcpy(states, temp, state_size, cudaMemcpyDeviceToDevice);
-    cudaFree(temp);
+    checkCudaErrors(cudaMalloc(&temp, state_size));
+    checkCurandErrors(curandGenerateUniform(gen, temp, state_size / sizeof(float)));
+    checkCudaErrors(cudaMemcpy(states, temp, state_size, cudaMemcpyDeviceToDevice));
+    checkCudaErrors(cudaFree(temp));
 
     dim3 blocks(((unsigned)num_elements + BLOCK_SIZE - 1) / BLOCK_SIZE);
     init_kernel << <blocks, BLOCK_SIZE >> > (density, states);
 
-    cudaFree(states);
-    curandDestroyGenerator(gen);
+    checkCudaErrors(cudaFree(states));
+    checkCurandErrors(curandDestroyGenerator(gen));
 }
 
 extern "C" void cuda_update(unsigned long long* data, int gridSize){
-    cudaMemcpyToSymbol(d_data, &data, sizeof(unsigned long long*));
+    checkCudaErrors(cudaMemcpyToSymbol(d_data, &data, sizeof(unsigned long long*)));
 
     size_t num_elements = (gridSize * gridSize * gridSize + 63) / 64;
     size_t state_size = num_elements * sizeof(curandState);
     curandState* states;
-    cudaMalloc(&states, state_size);
+    checkCudaErrors(cudaMalloc(&states, state_size));
 
     curandGenerator_t gen;
-    curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT);
-    curandSetPseudoRandomGeneratorSeed(gen, clock());
+    checkCurandErrors(curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT));
+    checkCurandErrors(curandSetPseudoRandomGeneratorSeed(gen, clock()));
 
     float* temp;
-    cudaMalloc(&temp, state_size);
-    curandGenerateUniform(gen, temp, state_size / sizeof(float));
-    cudaMemcpy(states, temp, state_size, cudaMemcpyDeviceToDevice);
-    cudaFree(temp);
+    checkCudaErrors(cudaMalloc(&temp, state_size));
+    checkCurandErrors(curandGenerateUniform(gen, temp, state_size / sizeof(float)));
+    checkCudaErrors(cudaMemcpy(states, temp, state_size, cudaMemcpyDeviceToDevice));
+    checkCudaErrors(cudaFree(temp));
 
     dim3 blocks(((unsigned)num_elements + BLOCK_SIZE - 1) / BLOCK_SIZE);
     update_kernel << <blocks, BLOCK_SIZE >> > (states);
 
-    cudaFree(states);
-    curandDestroyGenerator(gen);
+    checkCudaErrors(cudaFree(states));
+    checkCurandErrors(curandDestroyGenerator(gen));
 }
 
 extern "C" void cuda_render(cudaGraphicsResource* resource, unsigned long long* data,
                            int gridSize, int width, int height){
-    cudaMemcpyToSymbol(d_data, &data, sizeof(unsigned long long*));
+    checkCudaErrors(cudaMemcpyToSymbol(d_data, &data, sizeof(unsigned long long*)));
 
     cudaArray* array;
-    cudaGraphicsSubResourceGetMappedArray(&array, resource, 0, 0);
+    checkCudaErrors(cudaGraphicsSubResourceGetMappedArray(&array, resource, 0, 0));
 
     // Получаем указатель на данные текстуры
     uchar4* d_output;
-    cudaGraphicsMapResources(1, &resource, 0);
+    checkCudaErrors(cudaGraphicsMapResources(1, &resource, 0));
     size_t size;
-    cudaGraphicsResourceGetMappedPointer((void**)&d_output, &size, resource);
+    checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void**)&d_output, &size, resource));
 
     // Рендерим сцену
     dim3 blockDim(16, 16);
@@ -266,5 +268,5 @@ extern "C" void cuda_render(cudaGraphicsResource* resource, unsigned long long* 
 
     render_kernel << <gridDim, blockDim >> > (d_output, width, height, time);
 
-    cudaGraphicsUnmapResources(1, &resource, 0);
+    checkCudaErrors(cudaGraphicsUnmapResources(1, &resource, 0));
 }

@@ -18,8 +18,12 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="shader.cpp" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="volume_renderer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cuda_functions.h" />
+    <ClInclude Include="shader.h" />
+    <ClInclude Include="volume_renderer.h" />
   </ItemGroup>
 </Project>

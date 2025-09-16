@@ -2,6 +2,7 @@
 #include "cuda_functions.h" // Добавьте эту строку
 #include <cuda_gl_interop.h>
 #include <iostream>
+#include <helper_cuda.h>
 
 extern void cuda_init(unsigned long long* data, int gridSize, float density);
 extern void cuda_update(unsigned long long* data, int gridSize);
@@ -47,11 +48,11 @@ void VolumeRenderer::setupBuffers(){
 
 void VolumeRenderer::initializeCUDA(){
     dataSize = (gridSize * gridSize * gridSize + 63) / 64;
-    cudaMalloc((void**) & deviceData, dataSize * sizeof(unsigned long long));
+    checkCudaErrors(cudaMalloc((void**)&deviceData, dataSize * sizeof(unsigned long long)));
     cuda_init(deviceData, gridSize, density);
 
-    cudaGraphicsGLRegisterImage(&cudaTextureResource, texture,
-                               GL_TEXTURE_2D, cudaGraphicsRegisterFlagsWriteDiscard);
+    checkCudaErrors(cudaGraphicsGLRegisterImage(&cudaTextureResource, texture,
+                                                GL_TEXTURE_2D, cudaGraphicsRegisterFlagsWriteDiscard));
 }
 
 void VolumeRenderer::update(){
@@ -59,13 +60,13 @@ void VolumeRenderer::update(){
 }
 
 void VolumeRenderer::render(){
-    cudaGraphicsMapResources(1, &cudaTextureResource, 0);
+    checkCudaErrors(cudaGraphicsMapResources(1, &cudaTextureResource, 0));
     cudaArray* textureArray;
-    cudaGraphicsSubResourceGetMappedArray(&textureArray, cudaTextureResource, 0, 0);
+    checkCudaErrors(cudaGraphicsSubResourceGetMappedArray(&textureArray, cudaTextureResource, 0, 0));
 
     cuda_render(cudaTextureResource, deviceData, gridSize, WIDTH, HEIGHT);
 
-    cudaGraphicsUnmapResources(1, &cudaTextureResource, 0);
+    checkCudaErrors(cudaGraphicsUnmapResources(1, &cudaTextureResource, 0));
 
     shader->use();
     glBindVertexArray(VAO);
@@ -82,6 +83,8 @@ VolumeRenderer::~VolumeRenderer(){
 }
 
 void VolumeRenderer::cleanupCUDA(){
-    if(deviceData) cudaFree(deviceData);
-    if(cudaTextureResource) cudaGraphicsUnregisterResource(cudaTextureResource);
+    if(deviceData) 
+        checkCudaErrors(cudaFree(deviceData));
+    if(cudaTextureResource) 
+        checkCudaErrors(cudaGraphicsUnregisterResource(cudaTextureResource));
 }
