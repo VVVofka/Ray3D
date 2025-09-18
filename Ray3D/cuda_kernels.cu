@@ -123,18 +123,19 @@ __global__ void update_kernel(curandState* states){
     states[idx] = localState;
 }
 
-__global__ void render_kernel(uchar4* output, int width, int height, float time){
+__global__ void render_kernel(cudaSurfaceObject_t surface, int width, int height, float time){
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if(x >= width || y >= height) return;
+    if(x >= width || y >= height) 
+        return;
 
-    // Вычисляем направление луча с небольшим движением камеры
+    // Вычисляем направление луча
     float aspect = (float)width / height;
     float u = (2.0f * x / width - 1.0f) * aspect;
-    float v = 2.0f * y / height - 1.0f;
+    float v = 1.0f - 2.0f * y / height;
 
-    // Камера с небольшим вращением
-    float camAngle = sinf(time * 0.1f) * 0.2f;
+    // Камера с вращением
+    float camAngle = time * 0.1f;
     float3 rayDir = normalize(make_float3(
         u * cosf(camAngle) - sinf(camAngle),
         v,
@@ -143,44 +144,33 @@ __global__ void render_kernel(uchar4* output, int width, int height, float time)
 
     // Позиция камеры
     float3 cameraPos = make_float3(
-        c_gridSize / 2 + sinf(time * 0.05f) * 50.0f,
-        c_gridSize / 2 + cosf(time * 0.03f) * 30.0f,
-        c_gridSize * 1.5f
+        c_gridSize / 2.0f + sinf(time * 0.05f) * 100.0f,
+        c_gridSize / 2.0f,
+        c_gridSize * 2.0f
     );
 
     float3 rayPos = cameraPos;
     uchar4 color = make_uchar4(0, 0, 0, 255);
 
     // Ray marching
-    for(int i = 0; i < 128; i++){
+    for(int i = 0; i < 200; i++){
         int3 voxelPos = make_int3(
-            (int)floorf(rayPos.x) % c_gridSize,
-            (int)floorf(rayPos.y) % c_gridSize,
-            (int)floorf(rayPos.z) % c_gridSize
+            (int)floorf(rayPos.x),
+            (int)floorf(rayPos.y),
+            (int)floorf(rayPos.z)
         );
 
-        // Корректируем отрицательные координаты
-        if(voxelPos.x < 0) voxelPos.x += c_gridSize;
-        if(voxelPos.y < 0) voxelPos.y += c_gridSize;
-        if(voxelPos.z < 0) voxelPos.z += c_gridSize;
-
         if(get_voxel(voxelPos)){
-            // Жёлтый цвет с небольшими вариациями
-            float intensity = 0.8f + 0.2f * sinf(time + rayPos.x * 0.1f);
-            color = make_uchar4(
-                (unsigned char)(255 * intensity),
-                (unsigned char)(255 * intensity * 0.9f),
-                0,
-                255
-            );
+            // Жёлтый цвет
+            color = make_uchar4(255, 255, 0, 255);
             break;
         }
 
-        rayPos.x += rayDir.x * 2.0f;
-        rayPos.y += rayDir.y * 2.0f;
-        rayPos.z += rayDir.z * 2.0f;
+        rayPos.x += rayDir.x * 1.5f;
+        rayPos.y += rayDir.y * 1.5f;
+        rayPos.z += rayDir.z * 1.5f;
 
-        // Проверяем выход за границы пространства
+        // Проверяем выход за границы
         if(rayPos.x < -100 || rayPos.x > c_gridSize + 100 ||
             rayPos.y < -100 || rayPos.y > c_gridSize + 100 ||
             rayPos.z < -100 || rayPos.z > c_gridSize + 100){
@@ -188,7 +178,8 @@ __global__ void render_kernel(uchar4* output, int width, int height, float time)
         }
     }
 
-    write_pixel(output, x, y, width, color);
+    // Записываем пиксель через surface
+    surf2Dwrite(color, surface, x * sizeof(uchar4), y);
 }
 
 extern "C" void cuda_init(unsigned long long* data, int gridSize, float density){
@@ -215,6 +206,7 @@ extern "C" void cuda_init(unsigned long long* data, int gridSize, float density)
 
     dim3 blocks(((unsigned)num_elements + BLOCK_SIZE - 1) / BLOCK_SIZE);
     init_kernel << <blocks, BLOCK_SIZE >> > (density, states);
+    checkCudaErrors(cudaDeviceSynchronize());
 
     checkCudaErrors(cudaFree(states));
     checkCurandErrors(curandDestroyGenerator(gen));
@@ -240,6 +232,7 @@ extern "C" void cuda_update(unsigned long long* data, int gridSize){
 
     dim3 blocks(((unsigned)num_elements + BLOCK_SIZE - 1) / BLOCK_SIZE);
     update_kernel << <blocks, BLOCK_SIZE >> > (states);
+    checkCudaErrors(cudaDeviceSynchronize());
 
     checkCudaErrors(cudaFree(states));
     checkCurandErrors(curandDestroyGenerator(gen));
@@ -249,14 +242,18 @@ extern "C" void cuda_render(cudaGraphicsResource* resource, unsigned long long* 
                            int gridSize, int width, int height){
     checkCudaErrors(cudaMemcpyToSymbol(d_data, &data, sizeof(unsigned long long*)));
 
-    cudaArray* array;
-    checkCudaErrors(cudaGraphicsSubResourceGetMappedArray(&array, resource, 0, 0));
+    // Получаем cudaArray для текстуры
+    cudaArray* textureArray;
+    checkCudaErrors(cudaGraphicsSubResourceGetMappedArray(&textureArray, resource, 0, 0));
 
-    // Получаем указатель на данные текстуры
-    uchar4* d_output;
-    checkCudaErrors(cudaGraphicsMapResources(1, &resource, 0));
-    size_t size;
-    checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void**)&d_output, &size, resource));
+    // Создаем surface object для записи
+    cudaResourceDesc resDesc;
+    memset(&resDesc, 0, sizeof(resDesc));
+    resDesc.resType = cudaResourceTypeArray;
+    resDesc.res.array.array = textureArray;
+
+    cudaSurfaceObject_t surfaceObj;
+    checkCudaErrors(cudaCreateSurfaceObject(&surfaceObj, &resDesc));
 
     // Рендерим сцену
     dim3 blockDim(16, 16);
@@ -264,9 +261,13 @@ extern "C" void cuda_render(cudaGraphicsResource* resource, unsigned long long* 
                  (height + blockDim.y - 1) / blockDim.y);
 
     static float time = 0.0f;
-    time += 0.016f; // ~60 FPS
+    time += 0.016f;
 
-    render_kernel << <gridDim, blockDim >> > (d_output, width, height, time);
+    // Используем surface для записи
+    render_kernel << <gridDim, blockDim >> > (surfaceObj, width, height, time);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
 
-    checkCudaErrors(cudaGraphicsUnmapResources(1, &resource, 0));
+    // Удаляем surface object
+    checkCudaErrors(cudaDestroySurfaceObject(surfaceObj));
 }

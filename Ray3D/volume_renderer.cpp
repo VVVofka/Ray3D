@@ -51,6 +51,7 @@ void VolumeRenderer::initializeCUDA(){
     checkCudaErrors(cudaMalloc((void**)&deviceData, dataSize * sizeof(unsigned long long)));
     cuda_init(deviceData, gridSize, density);
 
+    // Регистрируем как изображение
     checkCudaErrors(cudaGraphicsGLRegisterImage(&cudaTextureResource, texture,
                                                 GL_TEXTURE_2D, cudaGraphicsRegisterFlagsWriteDiscard));
 }
@@ -61,8 +62,6 @@ void VolumeRenderer::update(){
 
 void VolumeRenderer::render(){
     checkCudaErrors(cudaGraphicsMapResources(1, &cudaTextureResource, 0));
-    cudaArray* textureArray;
-    checkCudaErrors(cudaGraphicsSubResourceGetMappedArray(&textureArray, cudaTextureResource, 0, 0));
 
     cuda_render(cudaTextureResource, deviceData, gridSize, WIDTH, HEIGHT);
 
