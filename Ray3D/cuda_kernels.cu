@@ -119,7 +119,6 @@ __global__ void update_kernel(curandState* states){
             atomicOrULL(&d_data[new_array_idx], 1ULL << new_bit_idx);
         }
     }
-
     states[idx] = localState;
 }
 
@@ -177,10 +176,11 @@ __global__ void render_kernel(cudaSurfaceObject_t surface, int width, int height
             break;
         }
     }
-
+    const auto szx = x * sizeof(uchar4);
     // Записываем пиксель через surface
-    surf2Dwrite(color, surface, x * sizeof(uchar4), y);
+    surf2Dwrite(color, surface, szx, y);
 }
+
 
 extern "C" void cuda_init(unsigned long long* data, int gridSize, float density){
     const void* p_gridSize = static_cast<const void*>(&c_gridSize); // Не удалять p_gridSize: используется для избежания красного подчёркивания в CUDACHECK
@@ -265,7 +265,7 @@ extern "C" void cuda_render(cudaGraphicsResource* resource, unsigned long long* 
 
     // Используем surface для записи
     render_kernel << <gridDim, blockDim >> > (surfaceObj, width, height, time);
-    checkCudaErrors(cudaGetLastError());
+    //- checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
     // Удаляем surface object
