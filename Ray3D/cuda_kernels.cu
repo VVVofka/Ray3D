@@ -71,7 +71,6 @@ __global__ void init_kernel(float density, curandState* states){
             random_bits |= (1ULL << i);
         }
     }
-
     d_data[idx] = random_bits;
     states[idx] = localState;
 }
@@ -145,7 +144,7 @@ __global__ void render_kernel(cudaSurfaceObject_t surface, int width, int height
     float3 cameraPos = make_float3(
         c_gridSize / 2.0f + sinf(time * 0.05f) * 100.0f,
         c_gridSize / 2.0f,
-        c_gridSize * 2.0f
+        100.0f // c_gridSize / 200000.0f
     );
 
     float3 rayPos = cameraPos;
@@ -172,7 +171,7 @@ __global__ void render_kernel(cudaSurfaceObject_t surface, int width, int height
         // Проверяем выход за границы
         if(rayPos.x < -100 || rayPos.x > c_gridSize + 100 ||
             rayPos.y < -100 || rayPos.y > c_gridSize + 100 ||
-            rayPos.z < -100 || rayPos.z > c_gridSize + 100){
+            rayPos.z < -10000 || rayPos.z > c_gridSize + 10000){
             break;
         }
     }
@@ -180,8 +179,65 @@ __global__ void render_kernel(cudaSurfaceObject_t surface, int width, int height
     // Записываем пиксель через surface
     surf2Dwrite(color, surface, szx, y);
 }
-
-
+// ***
+//__global__ void render_kernel(cudaSurfaceObject_t surface, int width, int height, float time){
+//    int x = blockIdx.x * blockDim.x + threadIdx.x;
+//    int y = blockIdx.y * blockDim.y + threadIdx.y;
+//    if(x >= width || y >= height) return;
+//
+//    // Простой тест - закрашиваем экран градиентом
+//    uchar4 color;
+//    if(time < 0.0f){ // Первые 2 секунды - тестовый градиент
+//        color = make_uchar4(
+//            (x * 255) / width,
+//            (y * 255) / height,
+//            128,
+//            255
+//        );
+//    } else{
+//        // Вычисляем направление луча
+//        float aspect = (float)width / height;
+//        float u = (2.0f * x / width - 1.0f) * aspect;
+//        float v = 1.0f - 2.0f * y / height;
+//
+//        // Упрощенная камера - смотрим прямо в центр
+//        float3 rayDir = normalize(make_float3(u, v, -1.0f));
+//        float3 cameraPos = make_float3(c_gridSize / 2.0f, c_gridSize / 2.0f, c_gridSize * 1000000.0f);
+//        float3 rayPos = cameraPos;
+//
+//        color = make_uchar4(0, 0, 0, 255);
+//
+//        // Ray marching с отладочной информацией
+//        for(int i = 0; i < 100; i++){
+//            int3 voxelPos = make_int3(
+//                (int)floorf(rayPos.x),
+//                (int)floorf(rayPos.y),
+//                (int)floorf(rayPos.z)
+//            );
+//
+//            // Проверяем границы
+//            if(voxelPos.x < 0 || voxelPos.x >= c_gridSize ||
+//                voxelPos.y < 0 || voxelPos.y >= c_gridSize //||
+//                //voxelPos.z < 0 || voxelPos.z >= c_gridSize
+//                ){
+//                break;
+//            }
+//
+//            if(get_voxel(voxelPos)){
+//                color = make_uchar4(255, 255, 0, 255);
+//                break;
+//            }
+//
+//            rayPos.x += rayDir.x * 2.0f;
+//            rayPos.y += rayDir.y * 2.0f;
+//            rayPos.z += rayDir.z * 2.0f;
+//        }
+//    }
+//
+//    surf2Dwrite(color, surface, x * sizeof(uchar4), y);
+//}
+// ***
+// Вызовите в cuda_init после инициализации
 extern "C" void cuda_init(unsigned long long* data, int gridSize, float density){
     const void* p_gridSize = static_cast<const void*>(&c_gridSize); // Не удалять p_gridSize: используется для избежания красного подчёркивания в CUDACHECK
     checkCudaErrors(cudaMemcpyToSymbol(p_gridSize, &gridSize, sizeof(int)));
@@ -207,6 +263,7 @@ extern "C" void cuda_init(unsigned long long* data, int gridSize, float density)
     dim3 blocks(((unsigned)num_elements + BLOCK_SIZE - 1) / BLOCK_SIZE);
     init_kernel << <blocks, BLOCK_SIZE >> > (density, states);
     checkCudaErrors(cudaDeviceSynchronize());
+
 
     checkCudaErrors(cudaFree(states));
     checkCurandErrors(curandDestroyGenerator(gen));

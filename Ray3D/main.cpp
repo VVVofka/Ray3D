@@ -29,7 +29,7 @@ int main(){
         return -1;
     }
 
-    volumeRenderer = new VolumeRenderer(1024, 0.0001f);
+    volumeRenderer = new VolumeRenderer(1024, 0.001f);
     volumeRenderer->initialize();
 
     while(!glfwWindowShouldClose(window)){
