@@ -46,40 +46,40 @@ void VolumeRenderer::setupBuffers(){
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 }
 
-//void VolumeRenderer::initializeCUDA(){
-//    dataSize = (gridSize * gridSize * gridSize + 63) / 64;
-//    checkCudaErrors(cudaMalloc((void**)&deviceData, dataSize * sizeof(unsigned long long)));
-//    cuda_init(deviceData, gridSize, density);
-//
-//    // Регистрируем как изображение
-//    checkCudaErrors(cudaGraphicsGLRegisterImage(&cudaTextureResource, texture,
-//                                                GL_TEXTURE_2D, cudaGraphicsRegisterFlagsWriteDiscard));
-//}
-// ***
 void VolumeRenderer::initializeCUDA(){
     dataSize = (gridSize * gridSize * gridSize + 63) / 64;
     checkCudaErrors(cudaMalloc((void**)&deviceData, dataSize * sizeof(unsigned long long)));
-    
-    // Проверка выделения памяти
-    std::cout << "Allocated " << dataSize << " elements for device data density=" << density*100 << std::endl;
-    
     cuda_init(deviceData, gridSize, density);
-    
-    // Проверка инициализации - посчитаем сколько точек создалось
-    unsigned long long* hostData = new unsigned long long[dataSize];
-    checkCudaErrors(cudaMemcpy(hostData, deviceData, dataSize * sizeof(unsigned long long), cudaMemcpyDeviceToHost));
-    
-    int pointCount = 0;
-    for (int i = 0; i < dataSize; i++) {
-        pointCount += __popcnt64(hostData[i]);
-    }
-    std::cout << "Initialized with " << pointCount << " points with " << (100.0 * pointCount)/ dataSize << "%" << std::endl;
-    delete[] hostData;
 
-        // Регистрируем как изображение
+    // Регистрируем как изображение
     checkCudaErrors(cudaGraphicsGLRegisterImage(&cudaTextureResource, texture,
                                                 GL_TEXTURE_2D, cudaGraphicsRegisterFlagsWriteDiscard));
 }
+// ***
+//void VolumeRenderer::initializeCUDA(){
+//    dataSize = (gridSize * gridSize * gridSize + 63) / 64;
+//    checkCudaErrors(cudaMalloc((void**)&deviceData, dataSize * sizeof(unsigned long long)));
+//    
+//    // Проверка выделения памяти
+//    std::cout << "Allocated " << dataSize << " elements for device data density=" << density*100 << std::endl;
+//    
+//    cuda_init(deviceData, gridSize, density);
+//    
+//    // Проверка инициализации - посчитаем сколько точек создалось
+//    unsigned long long* hostData = new unsigned long long[dataSize];
+//    checkCudaErrors(cudaMemcpy(hostData, deviceData, dataSize * sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+//    
+//    int pointCount = 0;
+//    for (int i = 0; i < dataSize; i++) {
+//        pointCount += __popcnt64(hostData[i]);
+//    }
+//    std::cout << "Initialized with " << pointCount << " points with " << (100.0 * pointCount)/ dataSize << "%" << std::endl;
+//    delete[] hostData;
+//
+//        // Регистрируем как изображение
+//    checkCudaErrors(cudaGraphicsGLRegisterImage(&cudaTextureResource, texture,
+//                                                GL_TEXTURE_2D, cudaGraphicsRegisterFlagsWriteDiscard));
+//}
 // ***
 void VolumeRenderer::update(){
     cuda_update(deviceData, gridSize);
