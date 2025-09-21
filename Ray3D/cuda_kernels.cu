@@ -56,7 +56,7 @@ __device__ void write_pixel(uchar4* output, int x, int y, int width, uchar4 colo
     }
 }
 
-__global__ void init_kernel(float density, curandState* states){
+__global__ void init_kernel_bak(float density, curandState* states){
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if(idx >= (c_gridSize * c_gridSize * c_gridSize + 63) / 64) return;
 
@@ -71,6 +71,24 @@ __global__ void init_kernel(float density, curandState* states){
     }
     d_data[idx] = random_bits;
     states[idx] = localState;
+}
+__global__ void init_kernel(){
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if(idx >= (c_gridSize * c_gridSize * c_gridSize + 63) / 64) return;
+    int x0 = (idx % c_gridSize) * 64;
+    int y = (idx / c_gridSize) % c_gridSize;
+    int z = idx / (c_gridSize * c_gridSize);
+    unsigned long long bits = 0;
+    for(int i = 0; i < 64; i++){
+        int x = x0 + i;
+        bool isx = (x == 0) || (x == (c_gridSize - 1));
+        bool isy = (y == 0) || (y == (c_gridSize - 1));
+        bool isz = (z == 0) || (z == (c_gridSize - 1));
+        if(isx && isy || isx && isz || isy && isz){
+            bits |= (1ULL << i);
+        }
+    }
+    d_data[idx] = bits;
 }
 
 __global__ void update_kernel(curandState* states){
@@ -119,65 +137,82 @@ __global__ void update_kernel(curandState* states){
     states[idx] = localState;
 }
 
+// ***
 __global__ void render_kernel(cudaSurfaceObject_t surface, int width, int height, float time){
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if(x >= width || y >= height) 
-        return;
-
-    // Вычисляем направление луча
+    if(x >= width || y >= height) return;
+    //if(x == width / 2 && y == height / 2)        printf("center\n");
+    // Ортографическая проекция - каждый пиксель соответствует позиции на передней плоскости
     float aspect = (float)width / height;
     float u = (2.0f * x / width - 1.0f) * aspect;
-    float v = 1.0f - 2.0f * y / height;
+    float v = 2.0f * y / height - 1.0f;
 
-    // Камера с вращением
-    float camAngle = time * 0.1f;
-    float3 rayDir = normalize(make_float3(
-        u * cosf(camAngle) - sinf(camAngle),
-        v,
-        -1.0f
-    ));
+    // Начальная позиция луча на передней плоскости куба
+    float3 rayStart = make_float3(
+        c_gridSize / 2.0f + u * c_gridSize / 2.0f,  // X: от 0 до c_gridSize
+        c_gridSize / 2.0f + v * c_gridSize / 2.0f,  // Y: от 0 до c_gridSize  
+        c_gridSize * 1.1f                       // Z: немного перед кубом
+    );
+    
+    // Применяем вращение вокруг центра куба
+    float angle = time * 0.3f;
+    float sinA = sinf(angle);
+    float cosA = cosf(angle);
 
-    // Позиция камеры
-    float3 cameraPos = make_float3(
-        c_gridSize / 2.0f + sinf(time * 0.05f) * 100.0f,
-        c_gridSize / 2.0f,
-        100.0f // было c_gridSize * 2.0f
+    // Вращаем стартовую позицию вокруг Y оси (центр вращения = центр куба)
+    float3 centered = make_float3(
+        rayStart.x - c_gridSize / 2.0f,
+        rayStart.y - c_gridSize / 2.0f,
+        rayStart.z - c_gridSize / 2.0f
     );
 
-    float3 rayPos = cameraPos;
+    float3 rotatedStart = make_float3(
+        centered.x * cosA - centered.z * sinA + c_gridSize / 2.0f,
+        centered.y + c_gridSize / 2.0f,
+        centered.x * sinA + centered.z * cosA + c_gridSize / 2.0f
+    );
+
+    // Отладочный вывод для первых нескольких пикселей
+    if(x < 5 && y == 0){
+        printf("Pixel (%d,%d): start(%.0f %.0f %.0f) -> rotated(%.0f %.0f %.0f)\n",
+               x, y, rayStart.x, rayStart.y, rayStart.z,
+               rotatedStart.x, rotatedStart.y, rotatedStart.z);
+    }
+
+    float3 rayPos = rotatedStart;
+    if(x == width / 2 && y == height / 2){
+        printf("Center pixel: (%.1f %.1f %.1f)\n", rayPos.x, rayPos.y, rayPos.z);
+    }
     uchar4 color = make_uchar4(0, 0, 0, 255);
 
-    // Ray marching
-    for(int i = 0; i < 200; i++){
+    // Двигаем луч назад (вглубь куба)
+    for(int i = 0; i < c_gridSize; i++){
         int3 voxelPos = make_int3(
             (int)floorf(rayPos.x),
             (int)floorf(rayPos.y),
             (int)floorf(rayPos.z)
         );
 
+        voxelPos = wrap_position(voxelPos);
+
         if(get_voxel(voxelPos)){
-            // Жёлтый цвет
             color = make_uchar4(255, 255, 0, 255);
             break;
         }
 
-        rayPos.x += rayDir.x * 1.5f;
-        rayPos.y += rayDir.y * 1.5f;
-        rayPos.z += rayDir.z * 1.5f;
+        // Двигаем луч на один воксель назад (вдоль локальной Z)
+        rayPos.z -= 1.0f;
 
-        // Проверяем выход за границы
-        if(rayPos.x < -100 || rayPos.x > c_gridSize + 100 ||
-            rayPos.y < -100 || rayPos.y > c_gridSize + 100 ||
-            rayPos.z < -100 || rayPos.z > c_gridSize + 100){
+        // Если луч вышел далеко за куб - прекращаем
+        if(rayPos.z < -100 || rayPos.z > c_gridSize + 100){
             break;
         }
     }
-    const auto szx = x * sizeof(uchar4);
-    // Записываем пиксель через surface
-    surf2Dwrite(color, surface, szx, y);
-}
 
+    surf2Dwrite(color, surface, x * sizeof(uchar4), y);
+}
+// ***
 // Вызовите в cuda_init после инициализации
 extern "C" void cuda_init(unsigned long long* data, int gridSize, float density){
     const void* p_gridSize = static_cast<const void*>(&c_gridSize); // Не удалять p_gridSize: используется для избежания красного подчёркивания в CUDACHECK
@@ -195,14 +230,15 @@ extern "C" void cuda_init(unsigned long long* data, int gridSize, float density)
     checkCurandErrors(curandSetPseudoRandomGeneratorSeed(gen, 1234));
 
     // Заполняем states случайными значениями
-    float* temp;
-    checkCudaErrors(cudaMalloc(&temp, state_size));
-    checkCurandErrors(curandGenerateUniform(gen, temp, state_size / sizeof(float)));
-    checkCudaErrors(cudaMemcpy(states, temp, state_size, cudaMemcpyDeviceToDevice));
-    checkCudaErrors(cudaFree(temp));
+    //float* temp;
+    //checkCudaErrors(cudaMalloc(&temp, state_size));
+    //checkCurandErrors(curandGenerateUniform(gen, temp, state_size / sizeof(float)));
+    //checkCudaErrors(cudaMemcpy(states, temp, state_size, cudaMemcpyDeviceToDevice));
+    //checkCudaErrors(cudaFree(temp));
 
     dim3 blocks(((unsigned)num_elements + BLOCK_SIZE - 1) / BLOCK_SIZE);
-    init_kernel << <blocks, BLOCK_SIZE >> > (density, states);
+    //init_kernel << <blocks, BLOCK_SIZE >> > (density, states);
+    init_kernel << <blocks, BLOCK_SIZE >> > ();
     checkCudaErrors(cudaDeviceSynchronize());
 
 
